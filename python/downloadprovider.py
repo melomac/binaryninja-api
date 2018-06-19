@@ -19,15 +19,18 @@
 # IN THE SOFTWARE.
 
 
-import code
-import traceback
-import ctypes
-import requests
 import abc
+import code
+import ctypes
+from six import with_metaclass
+from six.moves.urllib.request import build_opener, install_opener, ProxyHandler, urlopen
+from six.moves.urllib.error import URLError
 import sys
+import traceback
 
 # Binary Ninja Components
 import _binaryninjacore as core
+from binaryninja.setting import Setting
 import startup
 import log
 
@@ -109,9 +112,7 @@ class _DownloadProviderMetaclass(type):
 			raise AttributeError("attribute '%s' is read only" % name)
 
 
-class DownloadProvider(object):
-	__metaclass__ = _DownloadProviderMetaclass
-
+class DownloadProvider(with_metaclass(_DownloadProviderMetaclass, object)):
 	name = None
 	instance_class = None
 	_registered_providers = []
@@ -156,28 +157,34 @@ class PythonDownloadInstance(DownloadInstance):
 	@abc.abstractmethod
 	def perform_request(self, ctxt, url):
 		try:
-			r = requests.get(url, stream=True)
+			proxy_setting = Setting('download-client').get_string('https-proxy')
+			if proxy_setting:
+				opener = build_opener(ProxyHandler({'https': proxy_setting}))
+				install_opener(opener)
+
+			r = urlopen(url)
 			total_size = int(r.headers.get('content-length', 0))
 			bytes_sent = 0
-			for data in r.iter_content(4096):
+			while True:
+				data = r.read(4096)
+				if not data:
+					break
 				raw_bytes = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
-				if r.status_code == requests.codes.ok and len(raw_bytes) > 0:
-					bytes_wrote = core.BNWriteDataForDownloadInstance(self.handle, raw_bytes, len(raw_bytes))
-					if bytes_wrote != len(raw_bytes):
-						core.BNSetErrorForDownloadInstance(self.handle, "Bytes written mismatch!")
-						return -1
-					bytes_sent = bytes_sent + len(raw_bytes)
-					continue_download = core.BNNotifyProgressForDownloadInstance(self.handle, bytes_sent, total_size)
-					if continue_download is False:
-						core.BNSetErrorForDownloadInstance(self.handle, "Download aborted!")
-						return -1
-				else:
-					if r.status_code != requests.codes.ok:
-						core.BNSetErrorForDownloadInstance(self.handle, e.__class__.__name__ + " " + r.status_code)
-					else:
-						core.BNSetErrorForDownloadInstance(self.handle, "Received no data!")
+				bytes_wrote = core.BNWriteDataForDownloadInstance(self.handle, raw_bytes, len(raw_bytes))
+				if bytes_wrote != len(raw_bytes):
+					core.BNSetErrorForDownloadInstance(self.handle, "Bytes written mismatch!")
 					return -1
-		except requests.exceptions.RequestException as e:
+				bytes_sent = bytes_sent + bytes_wrote
+				continue_download = core.BNNotifyProgressForDownloadInstance(self.handle, bytes_sent, total_size)
+				if continue_download is False:
+					core.BNSetErrorForDownloadInstance(self.handle, "Download aborted!")
+					return -1
+
+			if not bytes_sent:
+				core.BNSetErrorForDownloadInstance(self.handle, "Received no data!")
+				return -1
+
+		except URLError as e:
 			core.BNSetErrorForDownloadInstance(self.handle, e.__class__.__name__)
 			return -1
 		except:
