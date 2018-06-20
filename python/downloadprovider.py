@@ -22,11 +22,17 @@
 import abc
 import code
 import ctypes
-from six import with_metaclass
-from six.moves.urllib.request import build_opener, install_opener, ProxyHandler, urlopen
-from six.moves.urllib.error import URLError
 import sys
 import traceback
+
+try:
+	from urllib.parse import urlparse, urlencode
+	from urllib.request import urlopen, Request, build_opener, install_opener, ProxyHandler
+	from urllib.error import HTTPError, URLError
+except ImportError:
+	from urlparse import urlparse
+	from urllib import urlencode
+	from urllib2 import urlopen, Request, build_opener, install_opener, ProxyHandler, HTTPError, URLError
 
 # Binary Ninja Components
 import _binaryninjacore as core
@@ -112,7 +118,8 @@ class _DownloadProviderMetaclass(type):
 			raise AttributeError("attribute '%s' is read only" % name)
 
 
-class DownloadProvider(with_metaclass(_DownloadProviderMetaclass, object)):
+class DownloadProvider(object):
+	__metaclass__ = _DownloadProviderMetaclass
 	name = None
 	instance_class = None
 	_registered_providers = []
